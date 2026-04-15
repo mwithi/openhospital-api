@@ -1,0 +1,425 @@
+/*
+ * Open Hospital (www.open-hospital.org)
+ * Copyright © 2006-2026 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
+ *
+ * Open Hospital is a free and open source software for healthcare data management.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * https://www.gnu.org/licenses/gpl-3.0-standalone.html
+ */
+package org.isf.plugin.rest;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.isf.plugin.dto.PluginDTO;
+import org.isf.plugin.manager.ManifestJsonReader;
+import org.isf.plugin.dto.PluginInstallProposalDTO;
+import org.isf.plugin.mapper.PluginMapper;
+import org.isf.plugin.model.OhPlugin;
+import org.isf.plugin.model.OhPlugin.PluginStatus;
+import org.isf.plugin.model.OhPluginEvent;
+import org.isf.plugin.model.OhPluginEvent.EventType;
+import org.isf.plugin.model.PluginDescriptor;
+import org.isf.plugin.service.PluginApprovalRepository;
+import org.isf.plugin.service.PluginEventRepository;
+import org.isf.plugin.service.PluginRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+/**
+ * REST controller for the Open Hospital plugin system.
+ *
+ * <h3>Install flow</h3>
+ * <ol>
+ *   <li>{@code POST /api/plugins/install} — upload ZIP, validate manifest,
+ *       return {@link PluginInstallProposalDTO} for admin review. Plugin is
+ *       saved with status {@code VALIDATING}.</li>
+ *   <li>{@code PUT /api/plugins/{pluginId}/approve} — admin approves,
+ *       plugin is activated (onInstall → onStart → ACTIVE).</li>
+ * </ol>
+ */
+@RestController
+@RequestMapping(value = "/plugins", produces = MediaType.APPLICATION_JSON_VALUE)
+@Tag(name = "Plugins", description = "Manage Open Hospital plugins")
+@SecurityRequirement(name = "bearerAuth")
+public class PluginController {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PluginController.class);
+
+    private final PluginRepository         pluginRepository;
+    private final PluginApprovalRepository approvalRepository;
+    private final PluginEventRepository    eventRepository;
+    private final PluginMapper             pluginMapper;
+
+    public PluginController(PluginRepository pluginRepository,
+                            PluginApprovalRepository approvalRepository,
+                            PluginEventRepository eventRepository,
+                            PluginMapper pluginMapper) {
+        this.pluginRepository   = pluginRepository;
+        this.approvalRepository = approvalRepository;
+        this.eventRepository    = eventRepository;
+        this.pluginMapper       = pluginMapper;
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /plugins
+    // -------------------------------------------------------------------------
+
+    @GetMapping
+    @Operation(summary = "List all installed plugins")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Plugin list returned"),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<List<PluginDTO>> listPlugins() {
+        List<OhPlugin> plugins = pluginRepository.findAllByOrderByNameAsc();
+        return ResponseEntity.ok(pluginMapper.toDTOList(plugins));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /plugins/{pluginId}
+    // -------------------------------------------------------------------------
+
+    @GetMapping("/{pluginId}")
+    @Operation(summary = "Get a single plugin by ID")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Plugin found"),
+        @ApiResponse(responseCode = "404", description = "Plugin not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<PluginDTO> getPlugin(
+            @Parameter(description = "Plugin identifier", required = true)
+            @PathVariable String pluginId) {
+        return pluginRepository.findById(pluginId)
+                .map(plugin -> ResponseEntity.ok(pluginMapper.toDTO(plugin)))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /plugins/install
+    // -------------------------------------------------------------------------
+
+    @PostMapping(value = "/install",
+                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Upload a plugin ZIP for validation",
+               description = "Validates the manifest and returns an install proposal " +
+                             "for administrator review. The plugin is not activated yet.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Proposal ready for review",
+                     content = @Content(schema = @Schema(
+                         implementation = PluginInstallProposalDTO.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid ZIP or manifest",
+                     content = @Content),
+        @ApiResponse(responseCode = "409", description = "Plugin already installed",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<?> installPlugin(
+            @Parameter(description = "Plugin ZIP file", required = true)
+            @RequestParam("file") MultipartFile file) {
+
+        String currentUser = currentUsername();
+
+        // 1. Extract manifest.json from the ZIP
+        ExtractedZip extracted;
+        try {
+            extracted = extractZip(file);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Plugin upload rejected: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IOException e) {
+            LOGGER.error("Failed to read plugin ZIP", e);
+            return ResponseEntity.badRequest().body("Failed to read ZIP: " + e.getMessage());
+        }
+
+        // 2. Check for duplicate
+        PluginDescriptor descriptor = extracted.descriptor();
+
+        if (pluginRepository.existsByPluginId(descriptor.getPluginId())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Plugin '" + descriptor.getPluginId() +
+                          "' is already installed. Use the update endpoint instead.");
+        }
+
+        // 3. Save ZIP to staging directory
+        Path jarPath;
+        try {
+            jarPath = saveToStaging(descriptor.getPluginId(), extracted.jarBytes());
+        } catch (IOException e) {
+            LOGGER.error("Failed to save plugin JAR to staging", e);
+            return ResponseEntity.internalServerError()
+                    .body("Failed to save plugin: " + e.getMessage());
+        }
+
+        // 4. Persist with VALIDATING status
+        OhPlugin plugin = new OhPlugin(
+            descriptor.getPluginId(),
+            descriptor.getVersion(),
+            descriptor.getName(),
+            PluginStatus.VALIDATING,
+            LocalDateTime.now(),
+            currentUser,
+            jarPath.toString(),
+            extracted.manifestJson()
+        );
+        pluginRepository.save(plugin);
+
+        // 5. Record UPLOADED event
+        eventRepository.save(new OhPluginEvent(
+            plugin, EventType.UPLOADED, LocalDateTime.now(), currentUser,
+            "ZIP uploaded by " + currentUser));
+
+        LOGGER.info("Plugin '{}' v{} uploaded by {} — awaiting approval",
+            descriptor.getPluginId(), descriptor.getVersion(), currentUser);
+
+        return ResponseEntity.ok(pluginMapper.toProposalDTO(descriptor));
+    }
+
+    // -------------------------------------------------------------------------
+    // PUT /plugins/{pluginId}/approve
+    // -------------------------------------------------------------------------
+
+    @PutMapping("/{pluginId}/approve")
+    @Operation(summary = "Approve and activate a VALIDATING plugin",
+               description = "Called after the administrator has reviewed the install " +
+                             "proposal. Activates the plugin: onInstall → onStart → ACTIVE.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Plugin approved and activated"),
+        @ApiResponse(responseCode = "404", description = "Plugin not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "409", description = "Plugin is not in VALIDATING status",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<?> approvePlugin(
+            @Parameter(description = "Plugin identifier", required = true)
+            @PathVariable String pluginId) {
+
+        String currentUser = currentUsername();
+
+        OhPlugin plugin = pluginRepository.findById(pluginId).orElse(null);
+        if (plugin == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (plugin.getStatus() != PluginStatus.VALIDATING) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Plugin '" + pluginId + "' is in status " +
+                          plugin.getStatus() + " — only VALIDATING plugins can be approved.");
+        }
+
+        // Activation: load → onInstall → onStart (PluginRegistryImpl — Phase 2)
+        // For now: mark ACTIVE and record events
+        plugin.setStatus(PluginStatus.ACTIVE);
+        pluginRepository.save(plugin);
+
+        LocalDateTime now = LocalDateTime.now();
+        eventRepository.save(new OhPluginEvent(
+            plugin, EventType.APPROVED, now, currentUser, null));
+        eventRepository.save(new OhPluginEvent(
+            plugin, EventType.INSTALLED, now, currentUser, null));
+        eventRepository.save(new OhPluginEvent(
+            plugin, EventType.STARTED, now, currentUser, null));
+
+        LOGGER.info("Plugin '{}' approved and activated by {}", pluginId, currentUser);
+        return ResponseEntity.ok(pluginMapper.toDTO(plugin));
+    }
+
+    // -------------------------------------------------------------------------
+    // PUT /plugins/{pluginId}/disable
+    // -------------------------------------------------------------------------
+
+    @PutMapping("/{pluginId}/disable")
+    @Operation(summary = "Disable an ACTIVE plugin")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Plugin disabled"),
+        @ApiResponse(responseCode = "404", description = "Plugin not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "409", description = "Plugin is not ACTIVE",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<?> disablePlugin(@PathVariable String pluginId) {
+        return setStatus(pluginId, PluginStatus.ACTIVE, PluginStatus.DISABLED,
+                         EventType.DISABLED, EventType.STOPPED);
+    }
+
+    // -------------------------------------------------------------------------
+    // PUT /plugins/{pluginId}/enable
+    // -------------------------------------------------------------------------
+
+    @PutMapping("/{pluginId}/enable")
+    @Operation(summary = "Re-enable a DISABLED plugin")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Plugin enabled"),
+        @ApiResponse(responseCode = "404", description = "Plugin not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "409", description = "Plugin is not DISABLED",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<?> enablePlugin(@PathVariable String pluginId) {
+        return setStatus(pluginId, PluginStatus.DISABLED, PluginStatus.ACTIVE,
+                         EventType.ENABLED, EventType.STARTED);
+    }
+
+    // -------------------------------------------------------------------------
+    // DELETE /plugins/{pluginId}
+    // -------------------------------------------------------------------------
+
+    @DeleteMapping("/{pluginId}")
+    @Operation(summary = "Uninstall a plugin",
+               description = "Calls onStop and onUninstall, then removes the plugin " +
+                             "record. Approval and event history is preserved.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "Plugin uninstalled"),
+        @ApiResponse(responseCode = "404", description = "Plugin not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<Void> uninstallPlugin(@PathVariable String pluginId) {
+        String currentUser = currentUsername();
+
+        OhPlugin plugin = pluginRepository.findById(pluginId).orElse(null);
+        if (plugin == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        eventRepository.save(new OhPluginEvent(
+            plugin, EventType.STOPPED, LocalDateTime.now(), currentUser, null));
+        eventRepository.save(new OhPluginEvent(
+            plugin, EventType.UNINSTALLED, LocalDateTime.now(), currentUser, null));
+
+        pluginRepository.delete(plugin);
+
+        LOGGER.info("Plugin '{}' uninstalled by {}", pluginId, currentUser);
+        return ResponseEntity.noContent().build();
+    }
+
+    // =========================================================================
+    // Private helpers
+    // =========================================================================
+
+    private ResponseEntity<?> setStatus(String pluginId,
+                                         PluginStatus requiredStatus,
+                                         PluginStatus newStatus,
+                                         EventType... events) {
+        String currentUser = currentUsername();
+        OhPlugin plugin = pluginRepository.findById(pluginId).orElse(null);
+        if (plugin == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (plugin.getStatus() != requiredStatus) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Plugin '" + pluginId + "' is in status " +
+                          plugin.getStatus() + " — expected " + requiredStatus);
+        }
+        plugin.setStatus(newStatus);
+        pluginRepository.save(plugin);
+
+        LocalDateTime now = LocalDateTime.now();
+        for (EventType et : events) {
+            eventRepository.save(new OhPluginEvent(plugin, et, now, currentUser, null));
+        }
+        LOGGER.info("Plugin '{}' status changed to {} by {}", pluginId, newStatus, currentUser);
+        return ResponseEntity.ok(pluginMapper.toDTO(plugin));
+    }
+
+    private String currentUsername() {
+        return SecurityContextHolder.getContext().getAuthentication().getName();
+    }
+
+    /**
+     * Extracts {@code manifest.json} and the plugin JAR from the uploaded ZIP.
+     *
+     * @throws IllegalArgumentException if the ZIP is malformed or missing required entries
+     * @throws IOException              if reading fails
+     */
+    private ExtractedZip extractZip(MultipartFile file)
+            throws IOException {
+        byte[] manifestBytes = null;
+        byte[] jarBytes      = null;
+
+        try (ZipInputStream zis = new ZipInputStream(file.getInputStream())) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String name = entry.getName();
+                if ("manifest.json".equals(name)) {
+                    manifestBytes = zis.readAllBytes();
+                } else if (name.endsWith(".jar") && !name.contains("/")) {
+                    jarBytes = zis.readAllBytes();
+                }
+                zis.closeEntry();
+            }
+        }
+
+        if (manifestBytes == null) {
+            throw new IllegalArgumentException(
+                "ZIP does not contain manifest.json at root level");
+        }
+        if (jarBytes == null) {
+            throw new IllegalArgumentException(
+                "ZIP does not contain a JAR file at root level");
+        }
+
+        String json = new String(manifestBytes, StandardCharsets.UTF_8);
+        PluginDescriptor descriptor;
+        try {
+            descriptor = ManifestJsonReader.read(json);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid manifest.json: " + e.getMessage(), e);
+        }
+
+        return new ExtractedZip(descriptor, jarBytes, json);
+    }
+
+    private Path saveToStaging(String pluginId, byte[] jarBytes) throws IOException {
+        Path stagingDir = Path.of(System.getProperty("oh.plugin.staging.dir",
+                                  System.getProperty("java.io.tmpdir") + "/oh-plugins-staging"));
+        Files.createDirectories(stagingDir);
+        Path jarPath = stagingDir.resolve(pluginId + ".jar");
+        Files.write(jarPath, jarBytes);
+        return jarPath;
+    }
+
+    private record ExtractedZip(PluginDescriptor descriptor, byte[] jarBytes, String manifestJson) {}
+}
