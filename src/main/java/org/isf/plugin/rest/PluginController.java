@@ -1,6 +1,6 @@
 /*
  * Open Hospital (www.open-hospital.org)
- * Copyright © 2006-2026 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
+ * Copyright © 2006-2024 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
  *
  * Open Hospital is a free and open source software for healthcare data management.
  *
@@ -35,6 +35,9 @@ import org.isf.plugin.service.PluginEventRepository;
 import org.isf.plugin.service.PluginRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -55,6 +58,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -82,6 +87,9 @@ public class PluginController {
     private final PluginApprovalRepository approvalRepository;
     private final PluginEventRepository    eventRepository;
     private final PluginMapper             pluginMapper;
+
+    @Value("${oh.plugin.staging.dir:#{systemProperties['java.io.tmpdir']}/oh-plugins-staging}")
+    private String stagingDir;
 
     public PluginController(PluginRepository pluginRepository,
                             PluginApprovalRepository approvalRepository,
@@ -181,8 +189,9 @@ public class PluginController {
         Path jarPath;
         try {
             jarPath = saveToStaging(descriptor.getPluginId(), extracted.jarBytes());
+            saveFrontendToStaging(descriptor.getPluginId(), extracted.frontendFiles());
         } catch (IOException e) {
-            LOGGER.error("Failed to save plugin JAR to staging", e);
+            LOGGER.error("Failed to save plugin files to staging", e);
             return ResponseEntity.internalServerError()
                     .body("Failed to save plugin: " + e.getMessage());
         }
@@ -377,13 +386,14 @@ public class PluginController {
                           "' does not match URL pluginId '" + pluginId + "'");
         }
 
-        // 3. Save new JAR to staging
+        // 3. Save new JAR and frontend to staging
         Path jarPath;
         try {
             jarPath = saveToStaging(pluginId, extracted.jarBytes());
+            saveFrontendToStaging(pluginId, extracted.frontendFiles());
         } catch (IOException e) {
             return ResponseEntity.internalServerError()
-                    .body("Failed to save plugin JAR: " + e.getMessage());
+                    .body("Failed to save plugin files: " + e.getMessage());
         }
 
         // 4. Detect if re-approval is needed by comparing with stored manifest
@@ -450,6 +460,56 @@ public class PluginController {
         return ResponseEntity.noContent().build();
     }
 
+    // -------------------------------------------------------------------------
+    // GET /plugins/{pluginId}/frontend/{filename}
+    // -------------------------------------------------------------------------
+
+    @GetMapping("/{pluginId}/frontend/{filename}")
+    @Operation(summary = "Serve a plugin frontend asset",
+               description = "Returns a static file from the plugin's frontend bundle " +
+                             "(e.g. remoteEntry.js, bundle.js). Used by OH UI to load " +
+                             "the plugin's React components via Module Federation.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "File returned"),
+        @ApiResponse(responseCode = "404", description = "File not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<Resource> serveFrontendAsset(
+            @Parameter(description = "Plugin identifier", required = true)
+            @PathVariable String pluginId,
+            @Parameter(description = "Filename within the frontend bundle",
+                       example = "remoteEntry.js")
+            @PathVariable String filename) {
+
+        // Security: reject path traversal attempts
+        if (filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        Path filePath = Path.of(stagingDir, pluginId, "frontend", filename);
+
+        if (!Files.exists(filePath)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String contentType = filename.endsWith(".js")  ? "application/javascript" :
+                             filename.endsWith(".css") ? "text/css" :
+                             filename.endsWith(".map") ? "application/json" :
+                             "application/octet-stream";
+
+        return ResponseEntity.ok()
+                .header("Content-Type", contentType)
+                // CORS: OH UI runs on a different port (e.g. :5173) — allow cross-origin load
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                .header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                // Cache: allow browser to cache the bundle for 1 hour
+                .header("Cache-Control", "public, max-age=3600")
+                .body(new FileSystemResource(filePath));
+    }
+
     // =========================================================================
     // Private helpers
     // =========================================================================
@@ -491,8 +551,9 @@ public class PluginController {
      */
     private ExtractedZip extractZip(MultipartFile file)
             throws IOException {
-        byte[] manifestBytes = null;
-        byte[] jarBytes      = null;
+        byte[]              manifestBytes = null;
+        byte[]              jarBytes      = null;
+        Map<String, byte[]> frontendFiles = new HashMap<>();
 
         try (ZipInputStream zis = new ZipInputStream(file.getInputStream())) {
             ZipEntry entry;
@@ -502,6 +563,12 @@ public class PluginController {
                     manifestBytes = zis.readAllBytes();
                 } else if (name.endsWith(".jar") && !name.contains("/")) {
                     jarBytes = zis.readAllBytes();
+                } else if (name.startsWith("frontend/") && !entry.isDirectory()) {
+                    // e.g. "frontend/remoteEntry.js" → key = "remoteEntry.js"
+                    String relativeName = name.substring("frontend/".length());
+                    if (!relativeName.isBlank()) {
+                        frontendFiles.put(relativeName, zis.readAllBytes());
+                    }
                 }
                 zis.closeEntry();
             }
@@ -524,17 +591,36 @@ public class PluginController {
             throw new IllegalArgumentException("Invalid manifest.json: " + e.getMessage(), e);
         }
 
-        return new ExtractedZip(descriptor, jarBytes, json);
+        return new ExtractedZip(descriptor, jarBytes, json, frontendFiles);
     }
 
     private Path saveToStaging(String pluginId, byte[] jarBytes) throws IOException {
-        Path stagingDir = Path.of(System.getProperty("oh.plugin.staging.dir",
-                                  System.getProperty("java.io.tmpdir") + "/oh-plugins-staging"));
-        Files.createDirectories(stagingDir);
-        Path jarPath = stagingDir.resolve(pluginId + ".jar");
+        Path stagingPath = Path.of(stagingDir);
+        Files.createDirectories(stagingPath);
+        Path jarPath = stagingPath.resolve(pluginId + ".jar");
         Files.write(jarPath, jarBytes);
         return jarPath;
     }
 
-    private record ExtractedZip(PluginDescriptor descriptor, byte[] jarBytes, String manifestJson) {}
+    private void saveFrontendToStaging(String pluginId,
+                                        Map<String, byte[]> frontendFiles) throws IOException {
+        if (frontendFiles == null || frontendFiles.isEmpty()) return;
+        Path stagingPath = Path.of(stagingDir);
+        Path frontendDir = stagingPath.resolve(pluginId).resolve("frontend");
+        Files.createDirectories(frontendDir);
+        for (Map.Entry<String, byte[]> entry : frontendFiles.entrySet()) {
+            Path target = frontendDir.resolve(entry.getKey());
+            Files.createDirectories(target.getParent());
+            Files.write(target, entry.getValue());
+        }
+        LOGGER.debug("Plugin '{}' — saved {} frontend file(s) to {}",
+            pluginId, frontendFiles.size(), frontendDir);
+    }
+
+    private record ExtractedZip(
+        PluginDescriptor       descriptor,
+        byte[]                 jarBytes,
+        String                 manifestJson,
+        Map<String, byte[]>    frontendFiles   // relative path → bytes, e.g. "remoteEntry.js" → ...
+    ) {}
 }
