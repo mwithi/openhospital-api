@@ -4144,6 +4144,63 @@ paths:
           description: Unauthorized
       security:
       - bearerAuth: []
+  /plugins/{pluginId}/manifest:
+    get:
+      tags:
+      - Plugins
+      operationId: getPluginManifest
+      parameters:
+      - name: pluginId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+      security:
+      - bearerAuth: []
+  /plugins/{pluginId}/frontend/{filename}:
+    get:
+      tags:
+      - Plugins
+      summary: Serve a plugin frontend asset
+      description: "Returns a static file from the plugin's frontend bundle (e.g.\
+        \ remoteEntry.js, bundle.js). Used by OH UI to load the plugin's React components\
+        \ via Module Federation."
+      operationId: serveFrontendAsset
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: filename
+        in: path
+        description: Filename within the frontend bundle
+        required: true
+        schema:
+          type: string
+        example: remoteEntry.js
+      responses:
+        "200":
+          description: File returned
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: File not found
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
   /permissions:
     get:
       tags:
@@ -6518,11 +6575,11 @@ components:
           format: int32
           description: lock
           example: 0
+        opd:
+          type: boolean
         female:
           type: boolean
         male:
-          type: boolean
-        opd:
           type: boolean
         pharmacy:
           type: boolean
