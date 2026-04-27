@@ -1,6 +1,6 @@
 /*
  * Open Hospital (www.open-hospital.org)
- * Copyright © 2006-2026 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
+ * Copyright © 2006-2024 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
  *
  * Open Hospital is a free and open source software for healthcare data management.
  *
@@ -244,8 +244,19 @@ public class PluginController {
                           plugin.getStatus() + " — only VALIDATING plugins can be approved.");
         }
 
-        // Activation: load → onInstall → onStart (PluginRegistryImpl — Phase 2)
-        // For now: mark ACTIVE and record events
+        // TODO Phase 3 — write OH_PLUGIN_APPROVAL rows (one per capability, permission,
+        //   field permission, and external connection). Currently OH_PLUGIN_APPROVAL is
+        //   always empty. Example for capabilities:
+        //     for (PluginCapability cap : descriptor.getCapabilities()) {
+        //         approvalRepository.save(new OhPluginApproval(
+        //             plugin, ApprovalType.CAPABILITY, cap.name(), currentUser, now, ""));
+        //     }
+        //   Do the same for permissions, fieldPermissions (with purpose), and connections.
+
+        // TODO Phase 3 — instead of just marking ACTIVE here, delegate to PluginRegistryImpl:
+        //   pluginRegistryImpl.activatePlugin(plugin)
+        //   which will call onInstall() + onStart() on the real plugin instance.
+        //   Currently onInstall/onStart are called at startup, not at approval time.
         plugin.setStatus(PluginStatus.ACTIVE);
         pluginRepository.save(plugin);
 
