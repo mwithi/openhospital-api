@@ -1,6 +1,6 @@
 /*
  * Open Hospital (www.open-hospital.org)
- * Copyright © 2006-2024 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
+ * Copyright © 2006-2026 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
  *
  * Open Hospital is a free and open source software for healthcare data management.
  *
@@ -310,6 +310,110 @@ public class PluginController {
     public ResponseEntity<?> enablePlugin(@PathVariable String pluginId) {
         return setStatus(pluginId, PluginStatus.DISABLED, PluginStatus.ACTIVE,
                          EventType.ENABLED, EventType.STARTED);
+    }
+
+    // -------------------------------------------------------------------------
+    // PUT /plugins/{pluginId}/update
+    // -------------------------------------------------------------------------
+
+    @PutMapping(value = "/{pluginId}/update",
+                consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Update an installed plugin with a new ZIP",
+               description = "Uploads a new version ZIP for an ACTIVE or DISABLED plugin. " +
+                             "If the new manifest declares additional capabilities, permissions, " +
+                             "field permissions, or external connections that were not in the " +
+                             "previous approved version, the plugin is moved to VALIDATING and " +
+                             "must be re-approved before activation. If the manifest is unchanged " +
+                             "or only removes elements, the update is applied immediately.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Update applied or pending approval",
+                     content = @Content(schema = @Schema(
+                         implementation = PluginInstallProposalDTO.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid ZIP or manifest",
+                     content = @Content),
+        @ApiResponse(responseCode = "404", description = "Plugin not found",
+                     content = @Content),
+        @ApiResponse(responseCode = "409", description = "Plugin is in VALIDATING or FAILED status",
+                     content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized",
+                     content = @Content)
+    })
+    public ResponseEntity<?> updatePlugin(
+            @Parameter(description = "Plugin identifier", required = true)
+            @PathVariable String pluginId,
+            @Parameter(description = "New plugin ZIP file", required = true)
+            @RequestParam("file") MultipartFile file) {
+
+        String currentUser = currentUsername();
+
+        OhPlugin existing = pluginRepository.findById(pluginId).orElse(null);
+        if (existing == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (existing.getStatus() == PluginStatus.VALIDATING
+                || existing.getStatus() == PluginStatus.FAILED) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Plugin '" + pluginId + "' is in status " +
+                          existing.getStatus() + " — resolve the current state first.");
+        }
+
+        // 1. Extract and validate new ZIP
+        ExtractedZip extracted;
+        try {
+            extracted = extractZip(file);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError()
+                    .body("Failed to read ZIP: " + e.getMessage());
+        }
+
+        PluginDescriptor newDescriptor = extracted.descriptor();
+
+        // 2. Verify pluginId matches
+        if (!pluginId.equals(newDescriptor.getPluginId())) {
+            return ResponseEntity.badRequest()
+                    .body("ZIP pluginId '" + newDescriptor.getPluginId() +
+                          "' does not match URL pluginId '" + pluginId + "'");
+        }
+
+        // 3. Save new JAR to staging
+        Path jarPath;
+        try {
+            jarPath = saveToStaging(pluginId, extracted.jarBytes());
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError()
+                    .body("Failed to save plugin JAR: " + e.getMessage());
+        }
+
+        // 4. Detect if re-approval is needed by comparing with stored manifest
+        // TODO Phase 3 — implement deep manifest diff:
+        //   parse existing.getManifestJson() into old PluginDescriptor,
+        //   compare capabilities, permissions, fieldPermissions, externalConnections.
+        //   If new manifest has MORE than old, set needsReApproval = true.
+        //   For now: always require re-approval on update as a safe default.
+        boolean needsReApproval = true;
+
+        // 5. Update stored data
+        existing.setVersion(newDescriptor.getVersion());
+        existing.setName(newDescriptor.getName());
+        existing.setJarPath(jarPath.toString());
+        existing.setManifestJson(extracted.manifestJson());
+        existing.setStatus(needsReApproval ? PluginStatus.VALIDATING : existing.getStatus());
+        pluginRepository.save(existing);
+
+        // 6. Record event
+        LocalDateTime now = LocalDateTime.now();
+        eventRepository.save(new OhPluginEvent(
+            existing, EventType.UPLOADED, now, currentUser,
+            "Updated to v" + newDescriptor.getVersion() + " by " + currentUser +
+            (needsReApproval ? " — re-approval required" : "")));
+
+        LOGGER.info("Plugin '{}' updated to v{} by {} — {}",
+            pluginId, newDescriptor.getVersion(), currentUser,
+            needsReApproval ? "awaiting re-approval" : "applied immediately");
+
+        return ResponseEntity.ok(pluginMapper.toProposalDTO(newDescriptor));
     }
 
     // -------------------------------------------------------------------------

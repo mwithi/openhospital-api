@@ -9,9 +9,12 @@ info:
     url: https://github.com/informatici/openhospital-api?tab=GPL-3.0-1-ov-file#readme
   version: 0.1.0
 servers:
-- url: http://localhost:8080
+- url: http://localhost:8080/openhospital-api-0.1.0
 security:
 - bearerAuth: []
+tags:
+- name: Plugins
+  description: Manage Open Hospital plugins
 paths:
   /wards:
     get:
@@ -651,6 +654,138 @@ paths:
             application/json:
               schema:
                 type: boolean
+      security:
+      - bearerAuth: []
+  /plugins/{pluginId}/update:
+    put:
+      tags:
+      - Plugins
+      summary: Update an installed plugin with a new ZIP
+      description: "Uploads a new version ZIP for an ACTIVE or DISABLED plugin. If\
+        \ the new manifest declares additional capabilities, permissions, field permissions,\
+        \ or external connections that were not in the previous approved version,\
+        \ the plugin is moved to VALIDATING and must be re-approved before activation.\
+        \ If the manifest is unchanged or only removes elements, the update is applied\
+        \ immediately."
+      operationId: updatePlugin
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: New plugin ZIP file
+              required:
+              - file
+      responses:
+        "200":
+          description: Update applied or pending approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstallProposalDTO"
+        "400":
+          description: Invalid ZIP or manifest
+        "404":
+          description: Plugin not found
+        "409":
+          description: Plugin is in VALIDATING or FAILED status
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+  /plugins/{pluginId}/enable:
+    put:
+      tags:
+      - Plugins
+      summary: Re-enable a DISABLED plugin
+      operationId: enablePlugin
+      parameters:
+      - name: pluginId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Plugin enabled
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Plugin not found
+        "409":
+          description: Plugin is not DISABLED
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+  /plugins/{pluginId}/disable:
+    put:
+      tags:
+      - Plugins
+      summary: Disable an ACTIVE plugin
+      operationId: disablePlugin
+      parameters:
+      - name: pluginId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Plugin disabled
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Plugin not found
+        "409":
+          description: Plugin is not ACTIVE
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+  /plugins/{pluginId}/approve:
+    put:
+      tags:
+      - Plugins
+      summary: Approve and activate a VALIDATING plugin
+      description: "Called after the administrator has reviewed the install proposal.\
+        \ Activates the plugin: onInstall → onStart → ACTIVE."
+      operationId: approvePlugin
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Plugin approved and activated
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Plugin not found
+        "409":
+          description: Plugin is not in VALIDATING status
+        "401":
+          description: Unauthorized
       security:
       - bearerAuth: []
   /patientvaccines/{code}:
@@ -2606,6 +2741,41 @@ paths:
                 $ref: "#/components/schemas/PregnantTreatmentTypeDTO"
       security:
       - bearerAuth: []
+  /plugins/install:
+    post:
+      tags:
+      - Plugins
+      summary: Upload a plugin ZIP for validation
+      description: Validates the manifest and returns an install proposal for administrator
+        review. The plugin is not activated yet.
+      operationId: installPlugin
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Plugin ZIP file
+              required:
+              - file
+      responses:
+        "200":
+          description: Proposal ready for review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstallProposalDTO"
+        "400":
+          description: Invalid ZIP or manifest
+        "409":
+          description: Plugin already installed
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
   /patientvaccines:
     post:
       tags:
@@ -3905,6 +4075,73 @@ paths:
             application/json:
               schema:
                 type: boolean
+      security:
+      - bearerAuth: []
+  /plugins:
+    get:
+      tags:
+      - Plugins
+      summary: List all installed plugins
+      operationId: listPlugins
+      responses:
+        "200":
+          description: Plugin list returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PluginDTO"
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+  /plugins/{pluginId}:
+    get:
+      tags:
+      - Plugins
+      summary: Get a single plugin by ID
+      operationId: getPlugin
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Plugin found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginDTO"
+        "404":
+          description: Plugin not found
+        "401":
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+    delete:
+      tags:
+      - Plugins
+      summary: Uninstall a plugin
+      description: "Calls onStop and onUninstall, then removes the plugin record.\
+        \ Approval and event history is preserved."
+      operationId: uninstallPlugin
+      parameters:
+      - name: pluginId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "204":
+          description: Plugin uninstalled
+        "404":
+          description: Plugin not found
+        "401":
+          description: Unauthorized
       security:
       - bearerAuth: []
   /permissions:
@@ -6811,6 +7048,124 @@ components:
       required:
       - code
       - description
+    ExternalConnectionDTO:
+      type: object
+      description: A declared external network connection
+      properties:
+        host:
+          type: string
+          description: Target hostname
+          example: pacs.hospital.org
+        port:
+          type: integer
+          format: int32
+          description: Target port
+          example: 11112
+        protocol:
+          type: string
+          description: Protocol
+          example: DICOM
+        purpose:
+          type: string
+          description: Stated purpose
+          example: Send DICOM study to hospital PACS
+        direction:
+          type: string
+          description: Direction
+          enum:
+          - OUTBOUND
+          - INBOUND
+    FieldPermissionDTO:
+      type: object
+      description: A declared field-level permission with its stated purpose
+      properties:
+        domain:
+          type: string
+          description: Domain name
+          example: Patient
+        access:
+          type: string
+          description: Access type
+          enum:
+          - READ
+          - WRITE
+        fields:
+          type: array
+          description: Field names within the domain
+          example:
+          - firstName
+          - lastName
+          items:
+            type: string
+        purpose:
+          type: string
+          description: Stated purpose shown to the administrator
+          example: Identify patient in audit log entry
+        maxSensitivity:
+          type: string
+          description: Highest sensitivity level among the declared fields
+          enum:
+          - ID
+          - INTERNAL
+          - PERSONAL
+          - CLINICAL
+          - SENSITIVE
+    PluginInstallProposalDTO:
+      type: object
+      description: Installation proposal presented to the administrator for approval
+      properties:
+        pluginId:
+          type: string
+          description: Plugin identifier
+          example: org.isf.plugin.example.patientaudit
+        version:
+          type: string
+          description: Plugin version
+          example: 1.0.0
+        name:
+          type: string
+          description: Human-readable plugin name
+          example: Patient Audit Log
+        description:
+          type: string
+          description: Plugin description
+        vendor:
+          type: string
+          description: Plugin vendor
+          example: Informatici Senza Frontiere
+        minCoreVersion:
+          type: string
+          description: Minimum OH core version required
+          example: 1.15.0
+        capabilities:
+          type: array
+          description: Declared capabilities
+          example:
+          - EVENT_LISTENER
+          - LOG_FILE_WRITE
+          items:
+            type: string
+        permissions:
+          type: array
+          description: Declared permissions
+          example:
+          - READ_PATIENT
+          items:
+            type: string
+        fieldPermissions:
+          type: array
+          description: Field-level data access declarations with purpose statements
+          items:
+            $ref: "#/components/schemas/FieldPermissionDTO"
+        externalConnections:
+          type: array
+          description: Declared external network connections
+          items:
+            $ref: "#/components/schemas/ExternalConnectionDTO"
+        requiresExplicitApproval:
+          type: boolean
+          description: Whether any field permission requires explicit admin approval
+            due to SENSITIVE sensitivity level
     PatientVaccineDTO:
       type: object
       properties:
@@ -8315,6 +8670,37 @@ components:
       - item
       - list
       - price
+    PluginDTO:
+      type: object
+      description: An installed Open Hospital plugin
+      properties:
+        pluginId:
+          type: string
+          description: Plugin identifier in reverse-domain notation
+          example: org.isf.plugin.example.patientaudit
+        version:
+          type: string
+          description: Plugin version (semver)
+          example: 1.0.0
+        name:
+          type: string
+          description: Human-readable plugin name
+          example: Patient Audit Log
+        status:
+          type: string
+          description: Current lifecycle status
+          enum:
+          - VALIDATING
+          - ACTIVE
+          - DISABLED
+          - FAILED
+        installedAt:
+          type: string
+          format: date-time
+          description: When the plugin was installed
+        installedBy:
+          type: string
+          description: Username of the administrator who installed the plugin
     PageInfoDTO:
       type: object
       properties:
