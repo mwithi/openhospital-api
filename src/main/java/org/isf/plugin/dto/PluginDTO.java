@@ -1,6 +1,6 @@
 /*
  * Open Hospital (www.open-hospital.org)
- * Copyright © 2006-2024 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
+ * Copyright © 2006-2026 Informatici Senza Frontiere (info@informaticisenzafrontiere.org)
  *
  * Open Hospital is a free and open source software for healthcare data management.
  *
@@ -55,7 +55,7 @@ public class PluginDTO {
     public LocalDateTime getInstalledAt() { return installedAt; }
     public String        getInstalledBy() { return installedBy; }
 
-    public void setPluginId(String pluginId)       { this.pluginId    = pluginId; }
+    public void setPluginId(String pluginId)        { this.pluginId    = pluginId; }
     public void setVersion(String version)          { this.version     = version; }
     public void setName(String name)                { this.name        = name; }
     public void setStatus(String status)            { this.status      = status; }
