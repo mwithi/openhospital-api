@@ -17,6 +17,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.isf.plugin.event.OHPluginEvent;
 import org.isf.plugin.manager.ManifestJsonReader;
+import org.isf.plugin.manager.ManifestVerifier;
 import org.isf.plugin.model.OhPlugin;
 import org.isf.plugin.model.OhPlugin.PluginStatus;
 import org.isf.plugin.model.OhPluginEvent;
@@ -28,6 +29,8 @@ import org.isf.plugin.spi.OHPlugin;
 import org.isf.plugin.spi.OHPluginLifecycleException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -64,7 +67,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>Uses a shared classloader per plugin JAR — no bytecode isolation beyond
  *       separate URLClassLoader instances.</li>
  *   <li>No network allowlist enforcement on the classloader level yet.</li>
- *   <li>Manifest double-verification (ZIP vs JAR) not yet implemented.</li>
  * </ul>
  */
 @Component
@@ -98,9 +100,16 @@ public class PluginRegistryImpl {
 
     @PostConstruct
     public void startAll() {
-        List<OhPlugin> activePlugins = pluginRepository.findAll().stream()
-                .filter(p -> p.getStatus() == PluginStatus.ACTIVE)
-                .toList();
+        List<OhPlugin> activePlugins;
+        try {
+            activePlugins = pluginRepository.findAll().stream()
+                    .filter(p -> p.getStatus() == PluginStatus.ACTIVE)
+                    .toList();
+        } catch (CannotCreateTransactionException | DataAccessException e) {
+            LOG.warn("PluginRegistry — database unavailable, skipping plugin startup: {}",
+                e.getMessage());
+            return;
+        }
         LOG.info("PluginRegistry — loading {} active plugin(s)", activePlugins.size());
 
         for (OhPlugin plugin : activePlugins) {
@@ -179,27 +188,26 @@ public class PluginRegistryImpl {
         // 1. Resolve JAR path
         Path jarPath = resolveJar(ohPlugin);
 
-        // 2. Deserialize descriptor from stored manifest JSON
+        // 2. Verify the JAR still contains the same manifest reviewed at upload
+        ManifestVerifier.verifyJarManifestMatches(ohPlugin.getManifestJson(), jarPath);
+
+        // 3. Deserialize descriptor from stored manifest JSON
         PluginDescriptor descriptor = ManifestJsonReader.read(ohPlugin.getManifestJson());
 
-        // 3. Create isolated classloader
+        // 4. Create isolated classloader
         URLClassLoader classLoader = new URLClassLoader(
             new URL[]{ jarPath.toUri().toURL() },
             Thread.currentThread().getContextClassLoader());
 
-        // 4. Discover OHPlugin implementation via ServiceLoader
+        // 5. Discover OHPlugin implementation via ServiceLoader
         OHPlugin plugin = loadPlugin(classLoader, pluginId);
 
-        // 5. Prepare log directory
+        // 6. Prepare log directory
         Path pluginLogDir = Path.of(logDir, pluginId);
         Files.createDirectories(pluginLogDir);
 
-        // 6. Build context
+        // 7. Build context
         PluginContextImpl ctx = new PluginContextImpl(descriptor, pluginLogDir);
-
-        // TODO Phase 3 — double-check manifest: compare manifest.json inside the JAR
-        //   with ohPlugin.getManifestJson() stored in DB. If they diverge, reject startup
-        //   and mark FAILED. This detects JAR tampering after install.
 
         // TODO Phase 3 — call onInstall() only on first activation (no INSTALLED event yet):
         //   if (!eventRepository.existsByPluginAndEventType(ohPlugin, EventType.INSTALLED)) {
@@ -210,17 +218,17 @@ public class PluginRegistryImpl {
         //   if plugin declares DB_MIGRATION capability, scan JAR for
         //   db/migration/p_{pluginId}_*.sql and apply via Flyway with pluginId prefix.
 
-        // 7. onStart
+        // 8. onStart
         try {
             plugin.onStart(ctx);
         } catch (OHPluginLifecycleException e) {
             throw new RuntimeException("onStart() failed for plugin '" + pluginId + "'", e);
         }
 
-        // 8. Register as running
+        // 9. Register as running
         running.put(pluginId, new RunningPlugin(ohPlugin, plugin, ctx, classLoader));
 
-        // 9. Record STARTED event
+        // 10. Record STARTED event
         eventRepository.save(new OhPluginEvent(
             ohPlugin, EventType.STARTED,
             LocalDateTime.now(), "system",

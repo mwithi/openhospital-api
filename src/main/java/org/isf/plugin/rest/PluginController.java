@@ -27,6 +27,7 @@ import java.util.zip.ZipInputStream;
 import org.isf.plugin.dto.PluginDTO;
 import org.isf.plugin.dto.PluginInstallProposalDTO;
 import org.isf.plugin.manager.ManifestJsonReader;
+import org.isf.plugin.manager.ManifestVerifier;
 import org.isf.plugin.mapper.PluginMapper;
 import org.isf.plugin.model.OhPlugin;
 import org.isf.plugin.model.OhPlugin.PluginStatus;
@@ -265,6 +266,17 @@ public class PluginController {
 		// pluginRegistryImpl.activatePlugin(plugin)
 		// which will call onInstall() + onStart() on the real plugin instance.
 		// Currently onInstall/onStart are called at startup, not at approval time.
+		try {
+			verifyStoredJarManifest(plugin);
+		} catch (IllegalArgumentException e) {
+			LOGGER.warn("Plugin '{}' approval rejected: {}", pluginId, e.getMessage());
+			return ResponseEntity.status(HttpStatus.CONFLICT)
+				.body(errorBody("Plugin artifact verification failed: " + e.getMessage()));
+		} catch (IOException e) {
+			LOGGER.error("Failed to verify plugin '{}' JAR before approval", pluginId, e);
+			return ResponseEntity.internalServerError()
+				.body(errorBody("Failed to verify plugin artifact: " + e.getMessage()));
+		}
 		plugin.setStatus(PluginStatus.ACTIVE);
 		pluginRepository.save(plugin);
 
@@ -500,6 +512,19 @@ public class PluginController {
 				.body("Plugin '" + pluginId + "' is in status " +
 					plugin.getStatus() + " — expected " + requiredStatus);
 		}
+		if (newStatus == PluginStatus.ACTIVE) {
+			try {
+				verifyStoredJarManifest(plugin);
+			} catch (IllegalArgumentException e) {
+				LOGGER.warn("Plugin '{}' activation rejected: {}", pluginId, e.getMessage());
+				return ResponseEntity.status(HttpStatus.CONFLICT)
+					.body(errorBody("Plugin artifact verification failed: " + e.getMessage()));
+			} catch (IOException e) {
+				LOGGER.error("Failed to verify plugin '{}' JAR before activation", pluginId, e);
+				return ResponseEntity.internalServerError()
+					.body(errorBody("Failed to verify plugin artifact: " + e.getMessage()));
+			}
+		}
 		plugin.setStatus(newStatus);
 		pluginRepository.save(plugin);
 
@@ -513,6 +538,34 @@ public class PluginController {
 
 	private String currentUsername() {
 		return SecurityContextHolder.getContext().getAuthentication().getName();
+	}
+
+	private Map<String, String> errorBody(String message) {
+		return Map.of("message", message);
+	}
+
+	private void verifyStoredJarManifest(OhPlugin plugin) throws IOException {
+		ManifestVerifier.verifyJarManifestMatches(plugin.getManifestJson(), resolveJar(plugin));
+	}
+
+	private Path resolveJar(OhPlugin plugin) {
+		if (plugin.getJarPath() != null) {
+			Path storedPath = Path.of(plugin.getJarPath());
+			if (Files.exists(storedPath)) {
+				return storedPath;
+			}
+			LOGGER.warn("Plugin '{}' stored JAR path not found: {} — trying staging dir",
+				plugin.getPluginId(), storedPath);
+		}
+
+		Path fallback = Path.of(stagingDir, plugin.getPluginId() + ".jar");
+		if (Files.exists(fallback)) {
+			return fallback;
+		}
+
+		throw new IllegalArgumentException(
+			"JAR not found for plugin '" + plugin.getPluginId() +
+				"'. Expected at: " + fallback);
 	}
 
 	/**
@@ -562,6 +615,7 @@ public class PluginController {
 		} catch (Exception e) {
 			throw new IllegalArgumentException("Invalid manifest.json: " + e.getMessage(), e);
 		}
+		ManifestVerifier.verifyJarManifestMatches(json, jarBytes);
 
 		return new ExtractedZip(descriptor, jarBytes, json, frontendFiles);
 	}
