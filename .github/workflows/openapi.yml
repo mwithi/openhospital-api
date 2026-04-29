@@ -30,8 +30,8 @@ jobs:
         id: vars
         run: |
           # Set default FORK_REPO and BRANCH_NAME values.
-          BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF##*/}}"
-          
+          BRANCH_NAME="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REPOSITORY" == "informatici/openhospital-api" ]]; then
             # For pushes to the main repository, default to the main core repo
             FORK_REPO="informatici/openhospital-core"
