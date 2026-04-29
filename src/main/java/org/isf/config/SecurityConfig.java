@@ -330,8 +330,6 @@ public class SecurityConfig {
 				.requestMatchers(HttpMethod.DELETE, "/wards/**").hasAuthority("wards.delete")
 
 				// plugins
-				// Note: /plugins/*/frontend/** is already permitAll() below —
-				// frontend assets (remoteEntry.js, bundle.js) are public.
 				// All management operations require authentication + permission.
 				.requestMatchers(HttpMethod.POST, "/plugins/install").hasAuthority("plugins.create")
 				.requestMatchers(HttpMethod.PUT, "/plugins/*/update").hasAuthority("plugins.create")
@@ -343,9 +341,6 @@ public class SecurityConfig {
 				.requestMatchers(HttpMethod.PUT, "/plugins/*/disable").hasAuthority("plugins.update")
 				.requestMatchers(HttpMethod.DELETE, "/plugins/*").hasAuthority("plugins.delete")
 				// plugin frontend assets — public, no auth required
-				// (the browser loads remoteEntry.js before the user logs in)
-				.requestMatchers("/plugins/*/frontend/**").permitAll()
-
 				.requestMatchers("/plugins/*/frontend/**").permitAll()
 
 				.anyRequest().authenticated()
