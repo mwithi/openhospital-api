@@ -9,6 +9,7 @@ This is the API project of [Open Hospital][openhospital]: it exposes a REST API 
   * [How to build [WIP]](#how-to-build-wip)
     + [Using Swagger-UI](#using-swagger-ui)
     + [Using Postman](#using-postman)
+    + [Plugin SPI notes [WIP]](#plugin-spi-notes-wip)
   * [How to build a war file](#how-to-build-a-war-file)
   * [How to deploy backend in docker environment](#how-to-deploy-backend-in-docker-environment)
   * [How to generate openapi specs](#how-to-generate-openapi-specs)
@@ -95,6 +96,30 @@ You can see Swagger API Documentation at: http://localhost:8080/swagger-ui/index
 
  1. import postman_collection.json in your Postman installation
  
+### Plugin SPI notes [WIP]
+
+The plugin SPI is currently under active development and this README does not yet replace a full plugin developer guide.
+
+At the moment plugin installation is exposed through the `/plugins` REST endpoints. A plugin upload is expected to be a ZIP file containing:
+
+```
+manifest.json
+<plugin>.jar
+frontend/...
+```
+
+The `manifest.json` file must be present at the root of the ZIP. The plugin JAR must also contain an equivalent `manifest.json` at its root. During install/update, approval/activation, and startup, the API verifies that the reviewed manifest matches the manifest embedded in the JAR; if they differ, the plugin artifact is rejected.
+
+Uploaded plugin artifacts are stored in the plugin staging directory, configured with:
+
+```
+oh.plugin.staging.dir
+```
+
+If not configured, the default is `${java.io.tmpdir}/oh-plugins-staging`.
+
+On API startup, active plugins are loaded from the database. If the database is not available during startup, plugin loading is skipped so that the API can continue its bootstrap. Plugin loading is not retried automatically when the database later becomes available; restart the API with the database available to load active plugins.
+
 ## How to build a war file
 
  1. Prepare settings from each `rsc/*.dist` file 
