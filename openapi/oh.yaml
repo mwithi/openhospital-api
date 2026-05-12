@@ -15,6 +15,8 @@ security:
 tags:
 - name: Plugins
   description: Manage Open Hospital plugins
+- name: Plugin Proxy
+  description: Generic reverse-proxy for external plugin integrations
 paths:
   /wards:
     get:
@@ -6533,6 +6535,217 @@ paths:
                 type: boolean
       security:
       - bearerAuth: []
+  /plugins/{pluginId}/proxy/{connectionKey}/**:
+    get:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
+    put:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy_2
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
+    post:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy_1
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
+    delete:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy_3
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
+    options:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy_6
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
+    head:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy_5
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
+    patch:
+      tags:
+      - Plugin Proxy
+      summary: Proxy request to the plugin's external system
+      description: Forwards the request to the URL configured for the plugin by the
+        declared and approved connection key.
+      operationId: proxy_4
+      parameters:
+      - name: pluginId
+        in: path
+        description: Plugin identifier
+        required: true
+        schema:
+          type: string
+      - name: connectionKey
+        in: path
+        description: Manifest external connection key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+      security:
+      - bearerAuth: []
 components:
   schemas:
     WardDTO:
@@ -7116,6 +7329,10 @@ components:
       type: object
       description: A declared external network connection
       properties:
+        connectionKey:
+          type: string
+          description: Stable connection key used by the plugin proxy
+          example: orthanc
         host:
           type: string
           description: Target hostname

@@ -20,6 +20,8 @@ import org.isf.plugin.dto.PluginInstallProposalDTO;
 import org.isf.plugin.dto.PluginInstallProposalDTO.ExternalConnectionDTO;
 import org.isf.plugin.dto.PluginInstallProposalDTO.FieldPermissionDTO;
 import org.isf.plugin.dto.PluginInstallProposalDTO.UiContributionDTO;
+import org.isf.plugin.manager.PluginExternalConnectionReader;
+import org.isf.plugin.manager.PluginExternalConnectionReader.ManifestExternalConnection;
 import org.isf.plugin.model.FieldPermission;
 import org.isf.plugin.model.OhPlugin;
 import org.isf.plugin.model.PluginDescriptor;
@@ -67,6 +69,10 @@ public class PluginMapper {
 	}
 
 	public PluginInstallProposalDTO toProposalDTO(PluginDescriptor descriptor) {
+		return toProposalDTO(descriptor, null);
+	}
+
+	public PluginInstallProposalDTO toProposalDTO(PluginDescriptor descriptor, String manifestJson) {
 		PluginInstallProposalDTO dto = new PluginInstallProposalDTO();
 		dto.setPluginId(descriptor.getPluginId());
 		dto.setVersion(descriptor.getVersion());
@@ -86,15 +92,29 @@ public class PluginMapper {
 			descriptor.getFieldPermissions().stream()
 				.map(this::toFieldPermissionDTO)
 				.toList());
-		dto.setExternalConnections(
-			descriptor.getExternalConnections().stream()
-				.map(this::toExternalConnectionDTO)
-				.toList());
+		dto.setExternalConnections(toExternalConnectionDTOs(descriptor, manifestJson));
 		dto.setRequiresExplicitApproval(descriptor.requiresExplicitApproval());
 		if (descriptor.getUiContribution() != null) {
 			dto.setUiContribution(toUiContributionDTO(descriptor.getUiContribution()));
 		}
 		return dto;
+	}
+
+	private List<ExternalConnectionDTO> toExternalConnectionDTOs(
+		PluginDescriptor descriptor,
+		String manifestJson) {
+		if (manifestJson != null) {
+			try {
+				return PluginExternalConnectionReader.read(manifestJson).stream()
+					.map(this::toExternalConnectionDTO)
+					.toList();
+			} catch (Exception e) {
+				// Fall back to the SPI descriptor representation for old/invalid stored data.
+			}
+		}
+		return descriptor.getExternalConnections().stream()
+			.map(this::toExternalConnectionDTO)
+			.toList();
 	}
 
 	private FieldPermissionDTO toFieldPermissionDTO(FieldPermission fp) {
@@ -118,6 +138,17 @@ public class PluginMapper {
 		dto.setProtocol(conn.protocol());
 		dto.setPurpose(conn.purpose());
 		dto.setDirection(conn.direction().name());
+		return dto;
+	}
+
+	private ExternalConnectionDTO toExternalConnectionDTO(ManifestExternalConnection conn) {
+		ExternalConnectionDTO dto = new ExternalConnectionDTO();
+		dto.setConnectionKey(conn.connectionKey());
+		dto.setHost(conn.host());
+		dto.setPort(conn.port());
+		dto.setProtocol(conn.protocol());
+		dto.setPurpose(conn.purpose());
+		dto.setDirection(conn.direction());
 		return dto;
 	}
 

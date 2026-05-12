@@ -123,6 +123,9 @@ public class PluginInstallProposalDTO {
 	@Schema(description = "A declared external network connection")
 	public static class ExternalConnectionDTO {
 
+		@Schema(description = "Stable connection key used by the plugin proxy", example = "orthanc")
+		private String connectionKey;
+
 		@Schema(description = "Target hostname", example = "pacs.hospital.org")
 		private String host;
 
@@ -138,6 +141,9 @@ public class PluginInstallProposalDTO {
 		@Schema(description = "Direction", allowableValues = { "OUTBOUND", "INBOUND" })
 		private String direction;
 
+		public String getConnectionKey() {
+			return connectionKey;
+		}
 		public String getHost() {
 			return host;
 		}
@@ -154,6 +160,9 @@ public class PluginInstallProposalDTO {
 			return direction;
 		}
 
+		public void setConnectionKey(String connectionKey) {
+			this.connectionKey = connectionKey;
+		}
 		public void setHost(String host) {
 			this.host = host;
 		}

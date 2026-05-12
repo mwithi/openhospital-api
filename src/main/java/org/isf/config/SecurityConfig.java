@@ -341,6 +341,7 @@ public class SecurityConfig {
 				.requestMatchers(HttpMethod.PUT, "/plugins/*/disable").hasAuthority("plugins.update")
 				.requestMatchers(HttpMethod.DELETE, "/plugins/*").hasAuthority("plugins.delete")
 				// plugin frontend assets — public, no auth required
+				.requestMatchers("/plugins/*/proxy/**").hasAuthority("plugins.read")
 				.requestMatchers("/plugins/*/frontend/**").permitAll()
 
 				.anyRequest().authenticated()

@@ -26,6 +26,7 @@ import java.util.zip.ZipInputStream;
 
 import org.isf.plugin.dto.PluginDTO;
 import org.isf.plugin.dto.PluginInstallProposalDTO;
+import org.isf.plugin.manager.PluginExternalConnectionReader;
 import org.isf.plugin.manager.ManifestJsonReader;
 import org.isf.plugin.manager.ManifestVerifier;
 import org.isf.plugin.mapper.PluginMapper;
@@ -144,7 +145,8 @@ public class PluginController {
 			.map(plugin -> {
 				try {
 					PluginDescriptor descriptor = ManifestJsonReader.read(plugin.getManifestJson());
-					return ResponseEntity.ok(pluginMapper.toProposalDTO(descriptor));
+					return ResponseEntity.ok(pluginMapper.toProposalDTO(
+						descriptor, plugin.getManifestJson()));
 				} catch (Exception e) {
 					return ResponseEntity.internalServerError().body("Cannot parse manifest");
 				}
@@ -222,7 +224,8 @@ public class PluginController {
 		LOGGER.info("Plugin '{}' v{} uploaded by {} — awaiting approval",
 			descriptor.getPluginId(), descriptor.getVersion(), currentUser);
 
-		return ResponseEntity.ok(pluginMapper.toProposalDTO(descriptor));
+		return ResponseEntity.ok(pluginMapper.toProposalDTO(
+			descriptor, extracted.manifestJson()));
 	}
 
 	// -------------------------------------------------------------------------
@@ -253,19 +256,6 @@ public class PluginController {
 					plugin.getStatus() + " — only VALIDATING plugins can be approved.");
 		}
 
-		// TODO Phase 3 — write OH_PLUGIN_APPROVAL rows (one per capability, permission,
-		// field permission, and external connection). Currently OH_PLUGIN_APPROVAL is
-		// always empty. Example for capabilities:
-		// for (PluginCapability cap : descriptor.getCapabilities()) {
-		// approvalRepository.save(new OhPluginApproval(
-		// plugin, ApprovalType.CAPABILITY, cap.name(), currentUser, now, ""));
-		// }
-		// Do the same for permissions, fieldPermissions (with purpose), and connections.
-
-		// TODO Phase 3 — instead of just marking ACTIVE here, delegate to PluginRegistryImpl:
-		// pluginRegistryImpl.activatePlugin(plugin)
-		// which will call onInstall() + onStart() on the real plugin instance.
-		// Currently onInstall/onStart are called at startup, not at approval time.
 		try {
 			verifyStoredJarManifest(plugin);
 		} catch (IllegalArgumentException e) {
@@ -277,6 +267,19 @@ public class PluginController {
 			return ResponseEntity.internalServerError()
 				.body(errorBody("Failed to verify plugin artifact: " + e.getMessage()));
 		}
+
+		PluginDescriptor descriptor;
+		try {
+			descriptor = ManifestJsonReader.read(plugin.getManifestJson());
+			writeApprovalRows(plugin, descriptor, currentUser, LocalDateTime.now());
+		} catch (Exception e) {
+			LOGGER.error("Failed to write approval rows for plugin '{}'", pluginId, e);
+			return ResponseEntity.internalServerError()
+				.body(errorBody("Failed to record plugin approval: " + e.getMessage()));
+		}
+
+		// TODO Phase 3 — delegate to PluginRegistryImpl.activatePlugin(plugin)
+		// to call onInstall() + onStart() without restart.
 		// Move files from validating/ to active/
 		try {
 			movePluginFiles(pluginId, "validating", "active");
@@ -428,7 +431,8 @@ public class PluginController {
 			pluginId, newDescriptor.getVersion(), currentUser,
 			needsReApproval ? "awaiting re-approval" : "applied immediately");
 
-		return ResponseEntity.ok(pluginMapper.toProposalDTO(newDescriptor));
+		return ResponseEntity.ok(pluginMapper.toProposalDTO(
+			newDescriptor, extracted.manifestJson()));
 	}
 
 	// -------------------------------------------------------------------------
@@ -645,12 +649,91 @@ public class PluginController {
 		PluginDescriptor descriptor;
 		try {
 			descriptor = ManifestJsonReader.read(json);
+			PluginExternalConnectionReader.read(json);
 		} catch (Exception e) {
 			throw new IllegalArgumentException("Invalid manifest.json: " + e.getMessage(), e);
 		}
 		ManifestVerifier.verifyJarManifestMatches(json, jarBytes);
 
 		return new ExtractedZip(descriptor, jarBytes, json, frontendFiles);
+	}
+
+	// -------------------------------------------------------------------------
+	// Approval persistence
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Writes one {@code OH_PLUGIN_APPROVAL} row for each approved item: capabilities, permissions, field permissions (with purpose), and external connections.
+	 *
+	 * <p>
+	 * These rows are the authoritative record of what the admin reviewed. Any security check that needs to verify "was this approved?" should query this table,
+	 * not the in-memory descriptor.
+	 */
+	private void writeApprovalRows(OhPlugin plugin,
+		org.isf.plugin.model.PluginDescriptor descriptor,
+		String approvedBy,
+		LocalDateTime approvedAt) {
+
+		// Constructor signature:
+		// OhPluginApproval(plugin, approvalType, itemKey, approvedBy, approvedAt, purposeShown)
+		// purposeShown is NOT NULL — use "" when no purpose applies
+
+		// Capabilities
+		for (org.isf.plugin.model.PluginCapability cap : descriptor.getCapabilities()) {
+			approvalRepository.save(new org.isf.plugin.model.OhPluginApproval(
+				plugin,
+				org.isf.plugin.model.OhPluginApproval.ApprovalType.CAPABILITY,
+				cap.name(),
+				approvedBy, approvedAt,
+				""));
+		}
+
+		// Permissions
+		for (org.isf.plugin.model.PluginPermission perm : descriptor.getPermissions()) {
+			approvalRepository.save(new org.isf.plugin.model.OhPluginApproval(
+				plugin,
+				org.isf.plugin.model.OhPluginApproval.ApprovalType.PERMISSION,
+				perm.name(),
+				approvedBy, approvedAt,
+				""));
+		}
+
+		// Field permissions — FIELD type, include purpose (GDPR-relevant)
+		for (org.isf.plugin.model.FieldPermission fp : descriptor.getFieldPermissions()) {
+			String key = fp.getDomainName() + "." +
+				String.join("+", fp.fieldNames());
+			approvalRepository.save(new org.isf.plugin.model.OhPluginApproval(
+				plugin,
+				org.isf.plugin.model.OhPluginApproval.ApprovalType.FIELD,
+				key,
+				approvedBy, approvedAt,
+				fp.getPurpose() != null ? fp.getPurpose() : ""));
+		}
+
+		// External connections — CONNECTION type
+		try {
+			for (PluginExternalConnectionReader.ManifestExternalConnection conn
+				: PluginExternalConnectionReader.read(plugin.getManifestJson())) {
+				approvalRepository.save(new org.isf.plugin.model.OhPluginApproval(
+					plugin,
+					org.isf.plugin.model.OhPluginApproval.ApprovalType.CONNECTION,
+					conn.approvalKey(),
+					approvedBy, approvedAt,
+					conn.purpose() != null ? conn.purpose() : ""));
+			}
+		} catch (Exception e) {
+			throw new IllegalArgumentException(
+				"Cannot read external connection approval keys for plugin '" +
+					plugin.getPluginId() + "'", e);
+		}
+
+		LOGGER.info("Plugin '{}' approval rows written: {} capabilities, {} permissions, " +
+			"{} field permissions, {} connections",
+			plugin.getPluginId(),
+			descriptor.getCapabilities().size(),
+			descriptor.getPermissions().size(),
+			descriptor.getFieldPermissions().size(),
+			descriptor.getExternalConnections().size());
 	}
 
 	// -------------------------------------------------------------------------

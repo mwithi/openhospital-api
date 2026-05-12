@@ -106,6 +106,21 @@ public final class ManifestJsonReader {
             builder.uiContribution(parseUiContribution(root.get("uiContribution")));
         }
 
+        if (root.has("externalConnections")) {
+            List<org.isf.plugin.model.PluginDescriptor.ExternalConnection> connections = new ArrayList<>();
+            for (JsonNode c : root.get("externalConnections")) {
+                connections.add(new org.isf.plugin.model.PluginDescriptor.ExternalConnection(
+                    c.get("connectionKey").asText(),
+                    c.get("host").asText(),
+                    c.get("port").asInt(),
+                    c.get("protocol").asText(),
+                    c.hasNonNull("purpose") ? c.get("purpose").asText() : "",
+                    org.isf.plugin.model.PluginDescriptor.ExternalConnection.Direction
+                        .valueOf(c.get("direction").asText())));
+            }
+            builder.externalConnections(connections);
+        }
+
         return builder.build();
     }
 
