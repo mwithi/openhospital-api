@@ -201,6 +201,7 @@ public class PluginInstallProposalDTO {
 
 			private String slotId;
 			private String mode; // APPEND, PREPEND, REPLACE
+			private String exposedModule;
 
 			public String getSlotId() {
 				return slotId;
@@ -213,6 +214,12 @@ public class PluginInstallProposalDTO {
 			}
 			public void setMode(String mode) {
 				this.mode = mode;
+			}
+			public String getExposedModule() {
+				return exposedModule;
+			}
+			public void setExposedModule(String exposedModule) {
+				this.exposedModule = exposedModule;
 			}
 		}
 

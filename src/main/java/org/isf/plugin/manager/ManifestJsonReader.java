@@ -136,9 +136,13 @@ public final class ManifestJsonReader {
 
         if (node.has("slots")) {
             for (JsonNode s : node.get("slots")) {
+                String exposedModule = s.hasNonNull("exposedModule")
+                    ? s.get("exposedModule").asText()
+                    : "./Component";
                 builder.slot(new SlotContribution(
                     s.get("slotId").asText(),
-                    SlotContribution.SlotMode.valueOf(s.get("mode").asText())));
+                    SlotContribution.SlotMode.valueOf(s.get("mode").asText()),
+                    exposedModule));
             }
         }
 

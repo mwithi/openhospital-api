@@ -7105,6 +7105,13 @@ components:
       required:
       - code
       - description
+    BundleDescriptorDTO:
+      type: object
+      properties:
+        entry:
+          type: string
+        remoteName:
+          type: string
     ExternalConnectionDTO:
       type: object
       description: A declared external network connection
@@ -7223,6 +7230,42 @@ components:
           type: boolean
           description: Whether any field permission requires explicit admin approval
             due to SENSITIVE sensitivity level
+        uiContribution:
+          $ref: "#/components/schemas/UiContributionDTO"
+          description: "UI contribution declared by the plugin, if any"
+    RouteDescriptorDTO:
+      type: object
+      properties:
+        path:
+          type: string
+        label:
+          type: string
+        menuPath:
+          type: string
+        permission:
+          type: string
+    SlotContributionDTO:
+      type: object
+      properties:
+        slotId:
+          type: string
+        mode:
+          type: string
+        exposedModule:
+          type: string
+    UiContributionDTO:
+      type: object
+      properties:
+        bundle:
+          $ref: "#/components/schemas/BundleDescriptorDTO"
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlotContributionDTO"
+        routes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteDescriptorDTO"
     PatientVaccineDTO:
       type: object
       properties:
@@ -8758,6 +8801,9 @@ components:
         installedBy:
           type: string
           description: Username of the administrator who installed the plugin
+        uiContribution:
+          $ref: "#/components/schemas/UiContributionDTO"
+          description: "UI contribution declared by the plugin - bundle entry, slots with exposedModule, routes"
     PageInfoDTO:
       type: object
       properties:

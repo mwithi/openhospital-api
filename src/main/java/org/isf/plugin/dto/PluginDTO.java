@@ -44,6 +44,9 @@ public class PluginDTO {
     @Schema(description = "Username of the administrator who installed the plugin")
     private String installedBy;
 
+    @Schema(description = "UI contribution declared by the plugin - bundle entry, slots with exposedModule, routes")
+    private PluginInstallProposalDTO.UiContributionDTO uiContribution;
+
     // -------------------------------------------------------------------------
     // Getters and setters
     // -------------------------------------------------------------------------
@@ -54,6 +57,7 @@ public class PluginDTO {
     public String        getStatus()      { return status; }
     public LocalDateTime getInstalledAt() { return installedAt; }
     public String        getInstalledBy() { return installedBy; }
+    public PluginInstallProposalDTO.UiContributionDTO getUiContribution() { return uiContribution; }
 
     public void setPluginId(String pluginId)        { this.pluginId    = pluginId; }
     public void setVersion(String version)          { this.version     = version; }
@@ -61,4 +65,5 @@ public class PluginDTO {
     public void setStatus(String status)            { this.status      = status; }
     public void setInstalledAt(LocalDateTime v)     { this.installedAt = v; }
     public void setInstalledBy(String installedBy)  { this.installedBy = installedBy; }
+    public void setUiContribution(PluginInstallProposalDTO.UiContributionDTO v) { this.uiContribution = v; }
 }

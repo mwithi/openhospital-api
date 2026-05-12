@@ -48,6 +48,17 @@ public class PluginMapper {
 		dto.setStatus(plugin.getStatus() != null ? plugin.getStatus().name() : null);
 		dto.setInstalledAt(plugin.getInstalledAt());
 		dto.setInstalledBy(plugin.getInstalledBy());
+		// Include uiContribution so pluginLoader.ts can read exposedModule per slot
+		if (plugin.getManifestJson() != null) {
+			try {
+				org.isf.plugin.model.PluginDescriptor descriptor = org.isf.plugin.manager.ManifestJsonReader.read(plugin.getManifestJson());
+				if (descriptor.getUiContribution() != null) {
+					dto.setUiContribution(toUiContributionDTO(descriptor.getUiContribution()));
+				}
+			} catch (Exception e) {
+				// Non-fatal: uiContribution will be null, loader falls back to defaults
+			}
+		}
 		return dto;
 	}
 
@@ -121,6 +132,7 @@ public class PluginMapper {
 		dto.setSlots(ui.getSlots().stream().map(s -> {
 			UiContributionDTO.SlotContributionDTO sd = new UiContributionDTO.SlotContributionDTO();
 			sd.setSlotId(s.slotId());
+			sd.setExposedModule(s.exposedModule());
 			sd.setMode(s.mode().name());
 			return sd;
 		}).toList());
