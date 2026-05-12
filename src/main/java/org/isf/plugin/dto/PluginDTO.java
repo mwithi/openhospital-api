@@ -13,57 +13,82 @@
  */
 package org.isf.plugin.dto;
 
-import io.swagger.v3.oas.annotations.media.Schema;
-
 import java.time.LocalDateTime;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 /**
- * DTO representing an installed plugin returned by GET /api/plugins
- * and GET /api/plugins/{pluginId}.
+ * DTO representing an installed plugin returned by GET /api/plugins and GET /api/plugins/{pluginId}.
  */
 @Schema(description = "An installed Open Hospital plugin")
 public class PluginDTO {
 
-    @Schema(description = "Plugin identifier in reverse-domain notation",
-            example = "org.isf.plugin.example.patientaudit")
-    private String pluginId;
+	@Schema(description = "Plugin identifier in reverse-domain notation", example = "org.isf.plugin.example.patientaudit")
+	private String pluginId;
 
-    @Schema(description = "Plugin version (semver)", example = "1.0.0")
-    private String version;
+	@Schema(description = "Plugin version (semver)", example = "1.0.0")
+	private String version;
 
-    @Schema(description = "Human-readable plugin name", example = "Patient Audit Log")
-    private String name;
+	@Schema(description = "Human-readable plugin name", example = "Patient Audit Log")
+	private String name;
 
-    @Schema(description = "Current lifecycle status",
-            allowableValues = {"VALIDATING", "ACTIVE", "DISABLED", "FAILED"})
-    private String status;
+	@Schema(description = "Current lifecycle status", allowableValues = { "VALIDATING", "ACTIVE", "DISABLED", "FAILED" })
+	private String status;
 
-    @Schema(description = "When the plugin was installed")
-    private LocalDateTime installedAt;
+	@Schema(description = "When the plugin was installed")
+	private LocalDateTime installedAt;
 
-    @Schema(description = "Username of the administrator who installed the plugin")
-    private String installedBy;
+	@Schema(description = "Username of the administrator who installed the plugin")
+	private String installedBy;
 
-    @Schema(description = "UI contribution declared by the plugin - bundle entry, slots with exposedModule, routes")
-    private PluginInstallProposalDTO.UiContributionDTO uiContribution;
+	@Schema(description = "UI contribution declared by the plugin — bundle entry, slots with exposedModule, routes")
+	private PluginInstallProposalDTO.UiContributionDTO uiContribution;
 
-    // -------------------------------------------------------------------------
-    // Getters and setters
-    // -------------------------------------------------------------------------
+	// -------------------------------------------------------------------------
+	// Getters and setters
+	// -------------------------------------------------------------------------
 
-    public String        getPluginId()    { return pluginId; }
-    public String        getVersion()     { return version; }
-    public String        getName()        { return name; }
-    public String        getStatus()      { return status; }
-    public LocalDateTime getInstalledAt() { return installedAt; }
-    public String        getInstalledBy() { return installedBy; }
-    public PluginInstallProposalDTO.UiContributionDTO getUiContribution() { return uiContribution; }
+	public String getPluginId() {
+		return pluginId;
+	}
+	public String getVersion() {
+		return version;
+	}
+	public String getName() {
+		return name;
+	}
+	public String getStatus() {
+		return status;
+	}
+	public LocalDateTime getInstalledAt() {
+		return installedAt;
+	}
+	public String getInstalledBy() {
+		return installedBy;
+	}
+	public PluginInstallProposalDTO.UiContributionDTO getUiContribution() {
+		return uiContribution;
+	}
 
-    public void setPluginId(String pluginId)        { this.pluginId    = pluginId; }
-    public void setVersion(String version)          { this.version     = version; }
-    public void setName(String name)                { this.name        = name; }
-    public void setStatus(String status)            { this.status      = status; }
-    public void setInstalledAt(LocalDateTime v)     { this.installedAt = v; }
-    public void setInstalledBy(String installedBy)  { this.installedBy = installedBy; }
-    public void setUiContribution(PluginInstallProposalDTO.UiContributionDTO v) { this.uiContribution = v; }
+	public void setPluginId(String pluginId) {
+		this.pluginId = pluginId;
+	}
+	public void setVersion(String version) {
+		this.version = version;
+	}
+	public void setName(String name) {
+		this.name = name;
+	}
+	public void setStatus(String status) {
+		this.status = status;
+	}
+	public void setInstalledAt(LocalDateTime v) {
+		this.installedAt = v;
+	}
+	public void setInstalledBy(String installedBy) {
+		this.installedBy = installedBy;
+	}
+	public void setUiContribution(PluginInstallProposalDTO.UiContributionDTO v) {
+		this.uiContribution = v;
+	}
 }

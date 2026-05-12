@@ -6788,13 +6788,13 @@ components:
           format: int32
           description: lock
           example: 0
-        opd:
+        pharmacy:
           type: boolean
         female:
           type: boolean
         male:
           type: boolean
-        pharmacy:
+        opd:
           type: boolean
       required:
       - beds
@@ -7693,11 +7693,11 @@ components:
           type: string
           description: "Flag record deleted, values are 'Y' OR 'N' "
           example: "N"
+        fhu:
+          type: string
         yprog:
           type: integer
           format: int32
-        fhu:
-          type: string
       required:
       - admDate
       - admitted
@@ -9020,7 +9020,7 @@ components:
           description: Username of the administrator who installed the plugin
         uiContribution:
           $ref: "#/components/schemas/UiContributionDTO"
-          description: "UI contribution declared by the plugin - bundle entry, slots with exposedModule, routes"
+          description: "UI contribution declared by the plugin — bundle entry, slots with exposedModule, routes"
     PageInfoDTO:
       type: object
       properties:
