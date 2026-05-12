@@ -46,3 +46,6 @@ jwt.token.validityInSecondsForRememberMe=259200
 # needed to start application even without DB connection
 spring.jpa.database-platform=org.hibernate.dialect.MariaDBDialect
 spring.jpa.hibernate.ddl-auto=none
+
+oh.plugin.staging.dir=C:/Users/mibem/.oh-plugins/staging
+oh.plugin.log.dir=C:/Users/mibem/.oh-plugins/logs

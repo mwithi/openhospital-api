@@ -277,7 +277,17 @@ public class PluginController {
 			return ResponseEntity.internalServerError()
 				.body(errorBody("Failed to verify plugin artifact: " + e.getMessage()));
 		}
+		// Move files from validating/ to active/
+		try {
+			movePluginFiles(pluginId, "validating", "active");
+		} catch (IOException e) {
+			LOGGER.error("Failed to move plugin '{}' files to active/", pluginId, e);
+			return ResponseEntity.internalServerError()
+				.body(errorBody("Failed to activate plugin files: " + e.getMessage()));
+		}
+
 		plugin.setStatus(PluginStatus.ACTIVE);
+		plugin.setJarPath(jarPath("active", pluginId).toString());
 		pluginRepository.save(plugin);
 
 		LocalDateTime now = LocalDateTime.now();
@@ -306,7 +316,7 @@ public class PluginController {
 	})
 	public ResponseEntity< ? > disablePlugin(@PathVariable String pluginId) {
 		return setStatus(pluginId, PluginStatus.ACTIVE, PluginStatus.DISABLED,
-			EventType.DISABLED, EventType.STOPPED);
+			"active", "disabled", EventType.DISABLED, EventType.STOPPED);
 	}
 
 	// -------------------------------------------------------------------------
@@ -323,7 +333,7 @@ public class PluginController {
 	})
 	public ResponseEntity< ? > enablePlugin(@PathVariable String pluginId) {
 		return setStatus(pluginId, PluginStatus.DISABLED, PluginStatus.ACTIVE,
-			EventType.ENABLED, EventType.STARTED);
+			"disabled", "active", EventType.ENABLED, EventType.STARTED);
 	}
 
 	// -------------------------------------------------------------------------
@@ -448,6 +458,9 @@ public class PluginController {
 
 		pluginRepository.delete(plugin);
 
+		// Delete plugin files from all status directories
+		deletePluginFiles(pluginId);
+
 		LOGGER.info("Plugin '{}' uninstalled by {}", pluginId, currentUser);
 		return ResponseEntity.noContent().build();
 	}
@@ -474,7 +487,8 @@ public class PluginController {
 			return ResponseEntity.badRequest().build();
 		}
 
-		Path filePath = Path.of(stagingDir, pluginId, "frontend", filename);
+		// Frontend assets are served only from active/ — never from validating/ or disabled/
+		Path filePath = pluginDir("active", pluginId).resolve("frontend").resolve(filename);
 
 		if (!Files.exists(filePath)) {
 			return ResponseEntity.notFound().build();
@@ -501,6 +515,8 @@ public class PluginController {
 	private ResponseEntity< ? > setStatus(String pluginId,
 		PluginStatus requiredStatus,
 		PluginStatus newStatus,
+		String fromDir,
+		String toDir,
 		EventType... events) {
 		String currentUser = currentUsername();
 		OhPlugin plugin = pluginRepository.findById(pluginId).orElse(null);
@@ -525,7 +541,16 @@ public class PluginController {
 					.body(errorBody("Failed to verify plugin artifact: " + e.getMessage()));
 			}
 		}
+		// Move files between status directories
+		try {
+			movePluginFiles(pluginId, fromDir, toDir);
+		} catch (IOException e) {
+			LOGGER.error("Failed to move plugin '{}' files {} → {}", pluginId, fromDir, toDir, e);
+			return ResponseEntity.internalServerError()
+				.body(errorBody("Failed to move plugin files: " + e.getMessage()));
+		}
 		plugin.setStatus(newStatus);
+		plugin.setJarPath(jarPath(toDir, pluginId).toString());
 		pluginRepository.save(plugin);
 
 		LocalDateTime now = LocalDateTime.now();
@@ -554,18 +579,26 @@ public class PluginController {
 			if (Files.exists(storedPath)) {
 				return storedPath;
 			}
-			LOGGER.warn("Plugin '{}' stored JAR path not found: {} — trying staging dir",
+			LOGGER.warn("Plugin '{}' stored JAR path not found: {} — searching subdirs",
 				plugin.getPluginId(), storedPath);
 		}
-
-		Path fallback = Path.of(stagingDir, plugin.getPluginId() + ".jar");
-		if (Files.exists(fallback)) {
-			return fallback;
+		// Search status subdirectories in priority order
+		for (String status : new String[] { "active", "validating", "disabled" }) {
+			Path candidate = jarPath(status, plugin.getPluginId());
+			if (Files.exists(candidate)) {
+				LOGGER.debug("Plugin '{}' JAR found in {}/", plugin.getPluginId(), status);
+				return candidate;
+			}
 		}
-
+		// Legacy fallback — flat staging dir (pre-split installs)
+		Path legacy = Path.of(stagingDir, plugin.getPluginId() + ".jar");
+		if (Files.exists(legacy)) {
+			LOGGER.warn("Plugin '{}' using legacy flat staging path: {}",
+				plugin.getPluginId(), legacy);
+			return legacy;
+		}
 		throw new IllegalArgumentException(
-			"JAR not found for plugin '" + plugin.getPluginId() +
-				"'. Expected at: " + fallback);
+			"JAR not found for plugin '" + plugin.getPluginId() + "'.");
 	}
 
 	/**
@@ -620,20 +653,111 @@ public class PluginController {
 		return new ExtractedZip(descriptor, jarBytes, json, frontendFiles);
 	}
 
+	// -------------------------------------------------------------------------
+	// Staging directory layout
+	//
+	// {stagingDir}/
+	// validating/{pluginId}/ ← after install, awaiting admin approval
+	// {pluginId}.jar
+	// frontend/
+	// active/{pluginId}/ ← after approve or enable
+	// {pluginId}.jar
+	// frontend/
+	// disabled/{pluginId}/ ← after disable
+	// {pluginId}.jar
+	// frontend/
+	// -------------------------------------------------------------------------
+
+	private Path stagingSubdir(String status) {
+		return Path.of(stagingDir, status.toLowerCase());
+	}
+
+	private Path pluginDir(String status, String pluginId) {
+		return stagingSubdir(status).resolve(pluginId);
+	}
+
+	private Path jarPath(String status, String pluginId) {
+		return pluginDir(status, pluginId).resolve(pluginId + ".jar");
+	}
+
+	private void movePluginFiles(String pluginId, String fromStatus, String toStatus)
+		throws IOException {
+		Path src = pluginDir(fromStatus, pluginId);
+		Path dst = pluginDir(toStatus, pluginId);
+		if (!Files.exists(src)) {
+			LOGGER.warn("Plugin '{}' source dir not found during move {} → {}: {}",
+				pluginId, fromStatus, toStatus, src);
+			return;
+		}
+		if (Files.exists(dst)) {
+			deleteRecursive(dst);
+		}
+		Files.createDirectories(dst.getParent());
+		// Use copy+delete instead of atomic move — atomic move can fail across
+		// filesystems or on Windows when the source is locked by another process.
+		copyRecursive(src, dst);
+		deleteRecursive(src);
+		LOGGER.debug("Plugin '{}' files moved: {} → {}", pluginId, fromStatus, toStatus);
+	}
+
+	private static void copyRecursive(Path src, Path dst) throws IOException {
+		Files.createDirectories(dst);
+		try (var stream = Files.walk(src)) {
+			for (Path file : (Iterable<Path>) stream::iterator) {
+				Path target = dst.resolve(src.relativize(file));
+				if (Files.isDirectory(file)) {
+					Files.createDirectories(target);
+				} else {
+					Files.copy(file, target,
+						java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+				}
+			}
+		}
+	}
+
+	private void deletePluginFiles(String pluginId) {
+		for (String status : new String[] { "validating", "active", "disabled" }) {
+			Path dir = pluginDir(status, pluginId);
+			if (Files.exists(dir)) {
+				try {
+					deleteRecursive(dir);
+					LOGGER.debug("Plugin '{}' files deleted from {}/", pluginId, status);
+				} catch (IOException e) {
+					LOGGER.warn("Could not delete plugin '{}' files from {}/: {}",
+						pluginId, status, e.getMessage());
+				}
+			}
+		}
+	}
+
+	private static void deleteRecursive(Path path) throws IOException {
+		if (!Files.exists(path))
+			return;
+		try (var stream = Files.walk(path)) {
+			stream.sorted(java.util.Comparator.reverseOrder())
+				.forEach(p -> {
+					try {
+						Files.delete(p);
+					} catch (IOException e) {
+						/* best effort */ }
+				});
+		}
+	}
+
 	private Path saveToStaging(String pluginId, byte[] jarBytes) throws IOException {
-		Path stagingPath = Path.of(stagingDir);
-		Files.createDirectories(stagingPath);
-		Path jarPath = stagingPath.resolve(pluginId + ".jar");
-		Files.write(jarPath, jarBytes);
-		return jarPath;
+		// Save into validating/ — moved to active/ at approve time
+		Path dir = pluginDir("validating", pluginId);
+		Files.createDirectories(dir);
+		Path jar = jarPath("validating", pluginId);
+		Files.write(jar, jarBytes);
+		return jar;
 	}
 
 	private void saveFrontendToStaging(String pluginId,
 		Map<String, byte[]> frontendFiles) throws IOException {
 		if (frontendFiles == null || frontendFiles.isEmpty())
 			return;
-		Path stagingPath = Path.of(stagingDir);
-		Path frontendDir = stagingPath.resolve(pluginId).resolve("frontend");
+		Path frontendDir = pluginDir("validating", pluginId).resolve("frontend");
 		Files.createDirectories(frontendDir);
 		for (Map.Entry<String, byte[]> entry : frontendFiles.entrySet()) {
 			Path target = frontendDir.resolve(entry.getKey());
