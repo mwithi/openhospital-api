@@ -26,15 +26,16 @@ import java.util.zip.ZipInputStream;
 
 import org.isf.plugin.dto.PluginDTO;
 import org.isf.plugin.dto.PluginInstallProposalDTO;
-import org.isf.plugin.manager.PluginExternalConnectionReader;
 import org.isf.plugin.manager.ManifestJsonReader;
 import org.isf.plugin.manager.ManifestVerifier;
+import org.isf.plugin.manager.PluginExternalConnectionReader;
 import org.isf.plugin.mapper.PluginMapper;
 import org.isf.plugin.model.OhPlugin;
 import org.isf.plugin.model.OhPlugin.PluginStatus;
 import org.isf.plugin.model.OhPluginEvent;
 import org.isf.plugin.model.OhPluginEvent.EventType;
 import org.isf.plugin.model.PluginDescriptor;
+import org.isf.plugin.registry.PluginRegistryImpl;
 import org.isf.plugin.service.PluginApprovalRepository;
 import org.isf.plugin.service.PluginEventRepository;
 import org.isf.plugin.service.PluginRepository;
@@ -88,6 +89,7 @@ public class PluginController {
 	private final PluginApprovalRepository approvalRepository;
 	private final PluginEventRepository eventRepository;
 	private final PluginMapper pluginMapper;
+	private final org.isf.plugin.registry.PluginRegistryImpl pluginRegistry;
 
 	@Value("${oh.plugin.staging.dir:#{systemProperties['java.io.tmpdir']}/oh-plugins-staging}")
 	private String stagingDir;
@@ -95,11 +97,12 @@ public class PluginController {
 	public PluginController(PluginRepository pluginRepository,
 		PluginApprovalRepository approvalRepository,
 		PluginEventRepository eventRepository,
-		PluginMapper pluginMapper) {
+		PluginMapper pluginMapper, PluginRegistryImpl pluginRegistry) {
 		this.pluginRepository = pluginRepository;
 		this.approvalRepository = approvalRepository;
 		this.eventRepository = eventRepository;
 		this.pluginMapper = pluginMapper;
+		this.pluginRegistry = pluginRegistry;
 	}
 
 	// -------------------------------------------------------------------------
@@ -278,9 +281,13 @@ public class PluginController {
 				.body(errorBody("Failed to record plugin approval: " + e.getMessage()));
 		}
 
-		// TODO Phase 3 — delegate to PluginRegistryImpl.activatePlugin(plugin)
-		// to call onInstall() + onStart() without restart.
+		// Stop the plugin if already running (re-approve after update)
+		if (pluginRegistry.isRunning(pluginId)) {
+			pluginRegistry.stopPlugin(pluginId);
+		}
+
 		// Move files from validating/ to active/
+		// Plugin is activated immediately via pluginRegistry.activatePlugin(plugin).
 		try {
 			movePluginFiles(pluginId, "validating", "active");
 		} catch (IOException e) {
@@ -455,6 +462,11 @@ public class PluginController {
 			return ResponseEntity.notFound().build();
 		}
 
+		// Stop the plugin to release the JAR file lock before deletion
+		if (pluginRegistry.isRunning(pluginId)) {
+			pluginRegistry.stopPlugin(pluginId);
+		}
+
 		eventRepository.save(new OhPluginEvent(
 			plugin, EventType.STOPPED, LocalDateTime.now(), currentUser, null));
 		eventRepository.save(new OhPluginEvent(
@@ -544,6 +556,10 @@ public class PluginController {
 				return ResponseEntity.internalServerError()
 					.body(errorBody("Failed to verify plugin artifact: " + e.getMessage()));
 			}
+		}
+		// Stop the plugin first to release the JAR file lock (critical on Windows)
+		if (pluginRegistry.isRunning(pluginId)) {
+			pluginRegistry.stopPlugin(pluginId);
 		}
 		// Move files between status directories
 		try {
@@ -712,8 +728,7 @@ public class PluginController {
 
 		// External connections — CONNECTION type
 		try {
-			for (PluginExternalConnectionReader.ManifestExternalConnection conn
-				: PluginExternalConnectionReader.read(plugin.getManifestJson())) {
+			for (PluginExternalConnectionReader.ManifestExternalConnection conn : PluginExternalConnectionReader.read(plugin.getManifestJson())) {
 				approvalRepository.save(new org.isf.plugin.model.OhPluginApproval(
 					plugin,
 					org.isf.plugin.model.OhPluginApproval.ApprovalType.CONNECTION,
@@ -724,7 +739,7 @@ public class PluginController {
 		} catch (Exception e) {
 			throw new IllegalArgumentException(
 				"Cannot read external connection approval keys for plugin '" +
-					plugin.getPluginId() + "'", e);
+					plugin.getPluginId() + "'",	e);
 		}
 
 		LOGGER.info("Plugin '{}' approval rows written: {} capabilities, {} permissions, " +
